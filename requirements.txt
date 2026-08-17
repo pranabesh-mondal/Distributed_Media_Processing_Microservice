@@ -1,0 +1,34 @@
+# FastAPI and ASGI server
+fastapi
+uvicorn[standard]
+
+# Celery and message broker
+celery
+redis
+pika
+
+# AWS SDK
+boto3
+
+# Media processing
+Pillow
+ffmpeg-python
+
+# Environment variables
+python-dotenv
+
+# Data validation
+pydantic
+pydantic-settings
+
+# Monitoring
+prometheus-client
+
+# Testing
+pytest
+pytest-asyncio
+pytest-cov
+httpx
+
+# Utilities
+python-multipart
