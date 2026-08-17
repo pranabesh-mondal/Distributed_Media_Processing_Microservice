@@ -54,7 +54,7 @@ This project delivers a scalable, event-driven backend microservice that offload
 ## Workflow
 
 **Upload Initiation**
-- Client requests job → FastAPI generates pre-signed S3 URL.
+- Client requests job -> FastAPI generates pre-signed S3 URL.
 - Client uploads directly to S3.
 
 **Job Submission**
@@ -136,7 +136,7 @@ This project delivers a scalable, event-driven backend microservice that offload
 
 ## Conclusion
 
-This microservice architecture provides a robust foundation for handling media processing at scale. By decoupling the processing workload from the main application, the system achieves better performance, scalability, and maintainability. The combination of modern technologies—FastAPI, Celery, RabbitMQ, Redis, and AWS services—ensures a production-ready solution that can handle high-volume media processing demands while maintaining reliability and observability.
+This microservice architecture provides a robust foundation for handling media processing at scale. By decoupling the processing workload from the main application, the system achieves better performance, scalability, and maintainability. The combination of modern technologies FastAPI, Celery, RabbitMQ, Redis, and AWS services, ensures a production-ready solution that can handle high-volume media processing demands while maintaining reliability and observability.
 
 
 ## Prerequisites
