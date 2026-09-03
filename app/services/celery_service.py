@@ -63,8 +63,8 @@ celery_app.conf.update(
     task_default_queue=settings.CELERY_QUEUE,
 )
 
-# Tasks are discovered automatically from the ``workers`` package.
-celery_app.autodiscover_tasks(["workers"], force=True)
+# Tasks are discovered automatically from the ``app.workers`` package.
+celery_app.autodiscover_tasks(["app.workers"], force=True)
 
 # A comma-separated tag used in log lines to correlate dispatch with workers.
 logger.info("Celery configured with broker=%s backend=%s",

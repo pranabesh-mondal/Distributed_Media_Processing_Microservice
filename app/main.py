@@ -6,7 +6,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.config import get_settings
-from app.routers import health
+from app.routers import health, job, upload
+from app.services.redis_service import RedisService
 from app.services.s3_service import S3Service
 
 logging.basicConfig(
@@ -24,6 +25,7 @@ async def lifespan(app: FastAPI):
     # Instantiate the S3 service once and share it via app.state so routers and
     # (later) worker tasks can reuse a single configured client.
     app.state.s3_service = S3Service(settings=settings)
+    app.state.redis_service = RedisService(settings=settings)
     logger.info("Starting %s (env=%s)", settings.APP_NAME, settings.APP_ENV)
     yield
     logger.info("Shutting down %s", settings.APP_NAME)
@@ -37,6 +39,8 @@ app = FastAPI(
 )
 
 app.include_router(health.router)
+app.include_router(upload.router)
+app.include_router(job.router)
 
 
 @app.get("/")
