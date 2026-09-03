@@ -6,12 +6,12 @@ later stage. Only the base schema for representing a job is defined here.
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.models.media import MediaType
+from app.models.media import MediaType, OperationRequest
 
 
 class JobStatus(str, Enum):
@@ -26,8 +26,12 @@ class Job(BaseModel):
 
     job_id: UUID = Field(..., description="Unique job identifier.")
     status: JobStatus = Field(JobStatus.PENDING, description="Current job status.")
+    media_type: Optional[MediaType] = Field(None, description="Type of media being processed.")
+    operations: Optional[List[dict]] = Field(None, description="Operations requested for this job.")
     source_key: Optional[str] = Field(None, description="S3 key of the source object.")
     result_key: Optional[str] = Field(None, description="S3 key of the processed result.")
+    thumbnail_keys: Optional[List[str]] = Field(None, description="S3 keys of generated thumbnails.")
+    metadata: Optional[dict] = Field(None, description="Processing metadata (dimensions, duration, ...).")
     error: Optional[str] = Field(None, description="Error message if the job failed.")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Job creation time.")
     updated_at: Optional[datetime] = Field(None, description="Last update time.")
@@ -45,6 +49,10 @@ class JobCreateRequest(BaseModel):
     result_key: Optional[str] = Field(
         None,
         description="Optional S3 key for the processed result. Auto-generated when omitted.",
+    )
+    operations: List[OperationRequest] = Field(
+        default_factory=list,
+        description="Ordered processing operations (resize, compress, watermark, ...).",
     )
 
 

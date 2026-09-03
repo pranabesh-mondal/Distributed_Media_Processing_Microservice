@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 
 JOB_STATUS_KEY = "jobs:{job_id}:status"
 JOB_ERROR_KEY = "jobs:{job_id}:error"
+JOB_PAYLOAD_KEY = "jobs:{job_id}:payload"  # media type + operations (JSON)
+JOB_RESULT_KEY = "jobs:{job_id}:result"  # worker outcome (JSON)
 
 
 class RedisServiceError(Exception):
@@ -123,6 +125,12 @@ class RedisService:
     def _error_key(self, job_id: str) -> str:
         return JOB_ERROR_KEY.format(job_id=job_id)
 
+    def _payload_key(self, job_id: str) -> str:
+        return JOB_PAYLOAD_KEY.format(job_id=job_id)
+
+    def _result_key(self, job_id: str) -> str:
+        return JOB_RESULT_KEY.format(job_id=job_id)
+
     def create_job(self, job_id: str) -> str:
         """Record a new job as ``pending`` and return its status key."""
         self._retry_command(
@@ -155,4 +163,30 @@ class RedisService:
         """Return the persisted error message for a job."""
         return self._retry_command(
             self.client.get, self._error_key(job_id), method="get_error"
+        )
+
+    def set_payload(self, job_id: str, payload_json: str) -> None:
+        """Store the job payload (media type + operations) as JSON."""
+        self._retry_command(
+            self.client.set, self._payload_key(job_id), payload_json,
+            method="set_payload",
+        )
+
+    def get_payload(self, job_id: str) -> Optional[str]:
+        """Return the stored job payload JSON, or ``None``."""
+        return self._retry_command(
+            self.client.get, self._payload_key(job_id), method="get_payload"
+        )
+
+    def set_result(self, job_id: str, result_json: str) -> None:
+        """Store the worker outcome (result key, thumbnails, metadata) as JSON."""
+        self._retry_command(
+            self.client.set, self._result_key(job_id), result_json,
+            method="set_result",
+        )
+
+    def get_result(self, job_id: str) -> Optional[str]:
+        """Return the stored worker outcome JSON, or ``None``."""
+        return self._retry_command(
+            self.client.get, self._result_key(job_id), method="get_result"
         )

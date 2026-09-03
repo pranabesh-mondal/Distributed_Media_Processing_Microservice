@@ -1,5 +1,6 @@
 """Job endpoints: submit media processing jobs and poll their status."""
 
+import json
 import logging
 from uuid import UUID, uuid4
 
@@ -7,10 +8,10 @@ from fastapi import APIRouter, HTTPException, Request
 from kombu.exceptions import OperationalError
 
 from app.models.job import Job, JobCreateRequest, JobStatus
+from app.models.media import MediaType
 from app.services.celery_service import dispatch_task
 from app.services.redis_service import RedisService
 from app.services.s3_service import S3Error, S3Service
-from app.utils.helpers import generate_object_key
 from app.workers.celery_worker import process_media
 
 logger = logging.getLogger(__name__)
@@ -43,15 +44,21 @@ def create_job(request: Request, payload: JobCreateRequest) -> Job:
         )
 
     job_id = str(uuid4())
-    result_key = payload.result_key or generate_object_key("processed", "result.bin")
+    media_type = payload.media_type.value
+    operations = [op.model_dump() for op in payload.operations]
 
     redis_service.create_job(job_id)
+    # Persist what the worker should do so status polls can echo it back.
+    redis_service.set_payload(
+        job_id,
+        json.dumps({"media_type": media_type, "operations": operations}),
+    )
 
     try:
         dispatch_task(
             process_media,
-            args=[job_id, payload.source_key],
-            kwargs={"result_key": result_key},
+            args=[job_id, payload.source_key, media_type],
+            kwargs={"operations": operations, "result_key": payload.result_key},
         )
     except (OperationalError, S3Error) as exc:
         # The job was registered but never reached the queue: mark it failed so
@@ -67,17 +74,20 @@ def create_job(request: Request, payload: JobCreateRequest) -> Job:
     return Job(
         job_id=UUID(job_id),
         status=JobStatus.PENDING,
+        media_type=payload.media_type,
+        operations=operations,
         source_key=payload.source_key,
-        result_key=result_key,
+        result_key=payload.result_key,
     )
 
 
 @router.get("/{job_id}", response_model=Job)
 def get_job(request: Request, job_id: UUID) -> Job:
-    """Return the current status (and error, if any) of a job."""
+    """Return the current status, requested operations and result of a job."""
     redis_service: RedisService = request.app.state.redis_service
+    job_id_str = str(job_id)
 
-    status = redis_service.get_status(str(job_id))
+    status = redis_service.get_status(job_id_str)
     if status is None:
         raise HTTPException(
             status_code=404,
@@ -90,8 +100,39 @@ def get_job(request: Request, job_id: UUID) -> Job:
         logger.warning("Unknown status '%s' for job %s", status, job_id)
         job_status = JobStatus.PENDING
 
+    # Echo the stored payload (media type + operations) back to the client.
+    media_type = None
+    operations = None
+    payload_raw = redis_service.get_payload(job_id_str)
+    if payload_raw:
+        try:
+            payload = json.loads(payload_raw)
+            media_type = MediaType(payload.get("media_type"))
+            operations = payload.get("operations")
+        except (ValueError, TypeError):
+            logger.warning("Invalid payload stored for job %s", job_id)
+
+    # Include the worker's outcome (result key, thumbnails, metadata) when done.
+    result_key = None
+    thumbnail_keys = None
+    metadata = None
+    result_raw = redis_service.get_result(job_id_str)
+    if result_raw:
+        try:
+            result = json.loads(result_raw)
+            result_key = result.get("result_key")
+            thumbnail_keys = result.get("thumbnail_keys")
+            metadata = result.get("metadata")
+        except ValueError:
+            logger.warning("Invalid result stored for job %s", job_id)
+
     return Job(
         job_id=job_id,
         status=job_status,
-        error=redis_service.get_error(str(job_id)),
+        media_type=media_type,
+        operations=operations,
+        result_key=result_key,
+        thumbnail_keys=thumbnail_keys,
+        metadata=metadata,
+        error=redis_service.get_error(job_id_str),
     )

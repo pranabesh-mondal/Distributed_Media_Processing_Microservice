@@ -16,6 +16,7 @@ class MediaOperation(str, Enum):
     COMPRESS = "compress"
     WATERMARK = "watermark"
     THUMBNAIL = "thumbnail"
+    TRANSCODE = "transcode"
 
 
 class UploadUrlRequest(BaseModel):
@@ -38,3 +39,14 @@ class UploadUrlError(BaseModel):
     """Error payload for upload URL generation."""
 
     detail: str = Field(..., description="Human-readable error message.")
+
+
+class OperationRequest(BaseModel):
+    """A single processing operation with its parameters.
+
+    See the README "Media Operations" section for accepted parameters per
+    operation. Operations are executed in the order they are listed.
+    """
+
+    op: MediaOperation = Field(..., description="Operation to perform.")
+    params: dict = Field(default_factory=dict, description="Operation-specific parameters.")
