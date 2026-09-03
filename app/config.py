@@ -35,6 +35,37 @@ class Settings(BaseSettings):
     # Optional custom S3 endpoint (e.g. LocalStack for local development).
     S3_ENDPOINT_URL: str = ""
 
+    # ---- Redis ----------------------------------------------------------
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    REDIS_DB: int = 0
+    # Connection and socket timeouts (seconds) used to fail fast, then retry,
+    # instead of blocking indefinitely on an unreachable Redis.
+    REDIS_CONNECT_TIMEOUT: int = 5
+    REDIS_SOCKET_TIMEOUT: int = 5
+    # How often (seconds) to issue a health-check ping on idle connections.
+    REDIS_HEALTH_CHECK_INTERVAL: int = 30
+
+    # ---- Celery / RabbitMQ ----------------------------------------------
+    CELERY_BROKER_URL: str = "amqp://guest:guest@localhost:5672//"
+    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
+    # Queue name Celery workers consume from.
+    CELERY_QUEUE: str = "media"
+    # Result backend expiry (seconds).
+    CELERY_RESULT_EXPIRES: int = 3600
+
+    # ---- Retry / network-failure handling --------------------------------
+    # Default number of times a transient (network) failure is retried in the
+    # service layer (Redis, dispatch, etc.).
+    DEFAULT_MAX_RETRIES: int = 3
+    # Exponential backoff base delay (seconds) and upper bound.
+    RETRY_BACKOFF: float = 1.0
+    RETRY_BACKOFF_MAX: float = 60.0
+    # Worker (Celery) retry policy for transient failures.
+    WORKER_MAX_RETRIES: int = 5
+    WORKER_RETRY_BACKOFF: int = 5
+    WORKER_RETRY_BACKOFF_MAX: int = 300
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

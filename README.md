@@ -269,6 +269,16 @@ Distributed_Media_Processing_Microservice/
 
 #### 1. Start Infrastructure Services
 
+Using Docker (recommended):
+
+```bash
+docker compose up -d
+```
+
+This starts Redis (localhost:6379) and RabbitMQ (localhost:5672, management UI at http://localhost:15672).
+
+Or run them natively:
+
 ```bash
 # Start Redis
 redis-server
@@ -284,7 +294,7 @@ rabbitmq-server
 venv\Scripts\activate
 
 # Start Celery worker
-celery -A workers.celery_worker worker --loglevel=info
+celery -A app.workers.celery_worker worker --loglevel=info
 ```
 
 #### 3. Start FastAPI Server

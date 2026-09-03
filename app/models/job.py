@@ -11,6 +11,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.models.media import MediaType
+
 
 class JobStatus(str, Enum):
     PENDING = "pending"
@@ -29,3 +31,24 @@ class Job(BaseModel):
     error: Optional[str] = Field(None, description="Error message if the job failed.")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Job creation time.")
     updated_at: Optional[datetime] = Field(None, description="Last update time.")
+
+
+class JobCreateRequest(BaseModel):
+    """Payload for submitting a new media processing job.
+
+    The client first uploads the raw file to S3 using a pre-signed URL
+    (``GET /api/v1/upload-url``) and then submits the resulting object key here.
+    """
+
+    media_type: MediaType = Field(..., description="Type of media being processed.")
+    source_key: str = Field(..., min_length=1, description="S3 key of the uploaded source object.")
+    result_key: Optional[str] = Field(
+        None,
+        description="Optional S3 key for the processed result. Auto-generated when omitted.",
+    )
+
+
+class JobNotFoundError(BaseModel):
+    """Error payload returned when a job id is unknown."""
+
+    detail: str = Field(..., description="Human-readable error message.")
