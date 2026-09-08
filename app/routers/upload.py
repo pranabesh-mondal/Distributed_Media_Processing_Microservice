@@ -5,6 +5,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.models.media import MediaType, UploadUrlResponse
+from app.services.metrics import UPLOAD_URLS_ISSUED
 from app.services.s3_service import S3Error, S3Service
 from app.utils.helpers import generate_object_key, infer_content_type
 
@@ -44,6 +45,7 @@ def get_upload_url(
         ) from exc
 
     logger.info("Issued upload URL key=%s media_type=%s", object_key, media_type)
+    UPLOAD_URLS_ISSUED.labels(media_type=media_type.value).inc()
     return UploadUrlResponse(
         upload_url=upload_url,
         object_key=object_key,

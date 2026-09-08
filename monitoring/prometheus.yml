@@ -1,0 +1,12 @@
+# Prometheus scrape configuration for the media processing microservice.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: media_api
+    metrics_path: /metrics
+    static_configs:
+      # From inside Docker the API is reachable as 'api'; change to
+      # 'localhost:8000' when scraping a locally-run dev server.
+      - targets: ["api:8000"]

@@ -19,7 +19,9 @@ from __future__ import annotations
 import json
 import logging
 import tempfile
+import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import Optional
 
@@ -27,6 +29,14 @@ from app.config import get_settings
 from app.models.job import JobStatus
 from app.models.media import MediaType
 from app.services.celery_service import NetworkAwareTask, celery_app
+from app.services.metrics import (
+    JOBS_COMPLETED,
+    JOBS_FAILED,
+    JOBS_IN_PROGRESS,
+    JOB_END_TO_END_SECONDS,
+    JOB_PROCESSING_SECONDS,
+    S3_OPERATIONS,
+)
 from app.services.processing import (
     FORMAT_EXTENSIONS,
     UnsupportedMediaError,
@@ -36,7 +46,7 @@ from app.services.processing import (
 from app.services.redis_service import RedisService, RedisServiceError
 from app.services.retries import TransientNetworkError
 from app.services.s3_service import S3Error, S3Service
-from app.utils.helpers import generate_object_key, infer_content_type
+from app.utils.helpers import build_cdn_url, generate_object_key, infer_content_type
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -58,8 +68,22 @@ class MediaProcessingTask(NetworkAwareTask):
                 redis = RedisService(settings=settings)
                 redis.update_status(job_id, JobStatus.FAILED.value)
                 redis.set_error(job_id, str(exc))
+                media_type = "unknown"
+                if len(args) > 2:
+                    media_type = str(args[2])
+                JOBS_FAILED.labels(
+                    media_type=media_type, reason="retries_exhausted"
+                ).inc()
             except RedisServiceError:
                 logger.exception("Could not record failure for job %s", job_id)
+
+
+def _record_s3_outcome(operation: str, outcome: str) -> None:
+    """Increment the S3 operation counter (best-effort; never raises)."""
+    try:
+        S3_OPERATIONS.labels(operation=operation, outcome=outcome).inc()
+    except Exception:  # pragma: no cover - metrics must never break the job
+        pass
 
 
 def run_job_pipeline(
@@ -97,11 +121,63 @@ def run_job_pipeline(
     """
     redis = redis_service or RedisService(settings=settings)
     s3 = s3_service or S3Service(settings=settings)
+    started = time.monotonic()
+    JOBS_IN_PROGRESS.labels(media_type=media_type).inc()
 
     # 1. Transition to "processing" (transient Redis failures retried by the
     #    worker's autoretry_for since RedisUnavailable is transient).
     redis.update_status(job_id, JobStatus.PROCESSING.value)
     logger.info("Job %s is now processing", job_id)
+
+    try:
+        result = _run_job_pipeline_inner(
+            job_id, source_key, media_type, operations, result_key,
+            redis=redis, s3=s3,
+        )
+        elapsed = time.monotonic() - started
+        JOB_PROCESSING_SECONDS.labels(media_type=media_type).observe(elapsed)
+        JOBS_COMPLETED.labels(media_type=media_type).inc()
+        _observe_end_to_end(job_id, media_type, redis)
+        return result
+    except Exception as exc:
+        # Permanent failures are counted here; transient ones (S3/Redis/broker)
+        # are re-raised and counted only when retries are exhausted, in
+        # MediaProcessingTask.on_failure below.
+        if not isinstance(
+            exc, (S3Error, TransientNetworkError, RedisServiceError)
+        ):
+            JOBS_FAILED.labels(
+                media_type=media_type, reason=type(exc).__name__
+            ).inc()
+        raise
+    finally:
+        JOBS_IN_PROGRESS.labels(media_type=media_type).dec()
+
+
+def _observe_end_to_end(job_id: str, media_type: str, redis: RedisService) -> None:
+    """Record submission->completion latency using the stored created_at."""
+    try:
+        created_raw = redis.get_created_at(job_id)
+        if created_raw:
+            created = datetime.fromisoformat(created_raw)
+            JOB_END_TO_END_SECONDS.labels(media_type=media_type).observe(
+                max(0.0, (datetime.now(timezone.utc) - created).total_seconds())
+            )
+    except (ValueError, TypeError, OSError):
+        pass
+
+
+def _run_job_pipeline_inner(
+    job_id: str,
+    source_key: str,
+    media_type: str,
+    operations: Optional[list],
+    result_key: Optional[str],
+    *,
+    redis: RedisService,
+    s3: S3Service,
+) -> dict:
+    """Run the download/process/upload stages (called by run_job_pipeline)."""
 
     with tempfile.TemporaryDirectory(prefix="media_job_") as tmp_dir:
         # 2. Download the source object to a temp file (network op; a temporary
@@ -109,6 +185,7 @@ def run_job_pipeline(
         source_suffix = PurePosixPath(source_key).suffix or ".bin"
         input_path = f"{tmp_dir}/source{source_suffix}"
         s3.download_file(source_key, input_path)
+        _record_s3_outcome("download", "success")
         logger.info("Job %s downloaded source %s", job_id, source_key)
 
         # 3. Run the media transforms (Pillow / FFmpeg). The processors write
@@ -134,6 +211,7 @@ def run_job_pipeline(
             final_result_key,
             extra_args={"ContentType": content_type or "application/octet-stream"},
         )
+        _record_s3_outcome("upload", "success")
         logger.info("Job %s uploaded result to %s", job_id, final_result_key)
 
         # 5. Upload any generated thumbnails (video jobs).
@@ -141,6 +219,7 @@ def run_job_pipeline(
         for index, thumb_path in enumerate(meta.get("thumbnails", []), start=1):
             thumb_key = generate_object_key("processed/thumbnails", f"thumb_{index}.jpg")
             s3.upload_file(thumb_path, thumb_key, extra_args={"ContentType": "image/jpeg"})
+            _record_s3_outcome("upload", "success")
             thumbnail_keys.append(thumb_key)
             logger.info("Job %s uploaded thumbnail to %s", job_id, thumb_key)
 
@@ -150,11 +229,17 @@ def run_job_pipeline(
         for key in ("format", "width", "height", "duration", "size_bytes")
         if key in meta
     }
+    result_url = build_cdn_url(final_result_key, settings.CLOUDFRONT_DOMAIN)
+    thumbnail_urls = [
+        build_cdn_url(key, settings.CLOUDFRONT_DOMAIN) for key in thumbnail_keys
+    ]
     redis.set_result(
         job_id,
         json.dumps({
             "result_key": final_result_key,
+            "result_url": result_url,
             "thumbnail_keys": thumbnail_keys,
+            "thumbnail_urls": [url for url in thumbnail_urls if url],
             "metadata": metadata,
         }),
     )
@@ -204,10 +289,9 @@ def run_offline_simulation(
 ) -> dict:
     """Execute the pipeline inline (no broker/worker needed).
 
-    Requires real S3/Redis access. Use ``scripts/e2e_local.py`` for a fully
-    offline end-to-end demo backed by a local folder instead::
-
-        python -m workers.celery_worker
+    Requires real S3/Redis access. The pipeline itself is broker-free, so it
+    can also be exercised directly in tests by injecting fake services into
+    :func:`run_job_pipeline`.
     """
     job_id = job_id or str(uuid.uuid4())
     logger.info("Offline simulation for job %s", job_id)

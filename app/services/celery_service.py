@@ -66,9 +66,17 @@ celery_app.conf.update(
 # Tasks are discovered automatically from the ``app.workers`` package.
 celery_app.autodiscover_tasks(["app.workers"], force=True)
 
-# A comma-separated tag used in log lines to correlate dispatch with workers.
+# A sanitized broker URL for logging (credentials masked).
+def _mask_url(url: str) -> str:
+    """Mask any credentials embedded in a connection URL."""
+    import re
+
+    return re.sub(r"(//[^:/@]+):([^@]+)@", r"\1:***@", url)
+
+
 logger.info("Celery configured with broker=%s backend=%s",
-            settings.CELERY_BROKER_URL, settings.CELERY_RESULT_BACKEND)
+            _mask_url(settings.CELERY_BROKER_URL),
+            _mask_url(settings.CELERY_RESULT_BACKEND))
 
 
 class NetworkAwareTask(Task):
@@ -115,22 +123,3 @@ def dispatch_task(task, *args, **kwargs) -> "Any":
     logger.info("Dispatched task %s async_id=%s",
                 task.name, async_result.id)
     return async_result
-
-
-class BrokerUnavailable(TransientNetworkError):
-    """Raised (by callers) when a job must not be enqueued yet."""
-
-
-def is_broker_reachable() -> bool:
-    """Best-effort check that the broker connection can be established."""
-    try:
-        conn = celery_app.connection()
-        conn.ensure_connection(
-            max_retries=1,
-            timeout=settings.RETRY_BACKOFF,
-        )
-        conn.release()
-    except OperationalError as exc:
-        logger.warning("Broker unreachable: %s", exc)
-        return False
-    return True

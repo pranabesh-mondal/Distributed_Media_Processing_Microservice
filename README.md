@@ -94,8 +94,8 @@ curl -X POST http://localhost:8000/api/v1/jobs \
 ```
 
 `GET /api/v1/jobs/{job_id}` returns the status, the requested operations and,
-once completed, the `result_key`, `thumbnail_keys` and processing `metadata`
-(format, dimensions, duration, size).
+once completed, the `result_key`, `thumbnail_keys`, CDN `result_url` / 
+`thumbnail_urls` and processing `metadata` (format, dimensions, duration, size).
 
 
 ## Workflow
@@ -138,10 +138,12 @@ once completed, the `result_key`, `thumbnail_keys` and processing `metadata`
 - Thumbnail extraction.
 - End-to-end local testing.
 
-**Week 4: Infrastructure & Monitoring** — Planned
-- Prometheus metrics integration.
-- Load testing with concurrent uploads.
-- Documentation + optimization.
+**Week 4: Infrastructure & Monitoring** — Complete
+- Prometheus metrics integration (`GET /metrics`).
+- CloudFront CDN delivery (`result_url` / `thumbnail_urls`) + pre-signed download URLs.
+- Dockerized API + worker (`Dockerfile`, full `docker-compose.yml`).
+- Test suite (`pytest`) with coverage reporting.
+- Load/testing script (`scripts/load_test.py`) with concurrent uploads.
 
 
 ## Technical Challenges
@@ -237,8 +239,9 @@ Key variables:
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | AWS credentials (empty → standard credential chain)  |
 | `AWS_REGION`, `S3_BUCKET_NAME`                | S3 target bucket and region                          |
 | `CLOUDFRONT_DOMAIN`                           | CDN domain for serving processed assets              |
-| `S3_PRESIGNED_URL_EXPIRY`                     | Upload URL validity in seconds (default `3600`)      |
+| `S3_PRESIGNED_URL_EXPIRY`                     | Upload/download URL validity in seconds (default `3600`) |
 | `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB`        | Redis job tracking                                   |
+| `REDIS_JOB_TTL`                               | Job record TTL in Redis (default `86400`)            |
 | `CELERY_BROKER_URL`                           | RabbitMQ broker URL                                  |
 | `CELERY_RESULT_BACKEND`                       | Celery result backend (Redis)                        |
 | `CELERY_QUEUE`                                | Queue workers consume from (default `media`)         |
@@ -270,17 +273,30 @@ Distributed_Media_Processing_Microservice/
 │   │   |-- redis_service.py             # Job status/payload/result tracking (with retries)
 │   │   |-- celery_service.py            # Celery app config, resilient dispatch
 │   │   |-- retries.py                   # Transient vs permanent error taxonomy + backoff
+│   │   |-- metrics.py                   # Prometheus metric registry
 │   │   |-- processing/                  # Media processing scripts
 │   │       |-- __init__.py              # Shared helpers, format map
 │   │       |-- image_processor.py       # Pillow: resize, compress, watermark, thumbnail
 │   │       |-- video_processor.py       # FFmpeg: transcode, compress, resize, thumbnails
 │   |-- utils/
 │   │   |-- __init__.py
-│   │   |-- helpers.py                   # Object-key generation, MIME inference
+│   │   |-- helpers.py                   # Object-key generation, MIME inference, CDN URLs
 │   |-- workers/
 │       |-- __init__.py
 │       |-- celery_worker.py             # Celery tasks: full media pipeline
-|-- docker-compose.yml                   # Redis + RabbitMQ (development infrastructure)
+|-- tests/                               # pytest suite (hermetic)
+│   |-- test_helpers.py
+│   |-- test_retries.py
+│   |-- test_image_processor.py
+│   |-- test_metrics.py
+│   |-- test_models.py
+|-- scripts/
+│   |-- load_test.py                     # Concurrent upload + job load tester
+|-- monitoring/
+│   |-- prometheus.yml                   # Prometheus scrape config
+|-- Dockerfile
+|-- pytest.ini
+|-- docker-compose.yml                   # Redis + RabbitMQ + API + worker + Prometheus
 |-- requirements.txt                     # Python dependencies
 |-- .env.example                         # Example environment variables
 |-- .gitignore                           # Git ignore file
@@ -294,8 +310,10 @@ Distributed_Media_Processing_Microservice/
 |--------|-----------------------|----------------------------------------------------|
 | POST   | /api/v1/jobs          | Create a media processing job (with operations)    |
 | GET    | /api/v1/jobs/{job_id} | Job status, operations, result keys and metadata   |
+| GET    | /api/v1/jobs/{job_id}/download-url | Pre-signed S3 download URL for the result |
 | GET    | /api/v1/upload-url    | Generate pre-signed S3 upload URL                  |
 | GET    | /health               | Health check endpoint                              |
+| GET    | /metrics              | Prometheus metrics (Prometheus text format)        |
 | GET    | /docs, /redoc         | Interactive API documentation                      |
 
 
@@ -327,7 +345,17 @@ Using Docker (recommended):
 docker compose up -d
 ```
 
-This starts Redis (localhost:6379) and RabbitMQ (localhost:5672, management UI at http://localhost:15672).
+This starts **everything**: Redis (localhost:6379), RabbitMQ (localhost:5672,
+management UI at http://localhost:15672), the API (localhost:8000), a Celery
+worker, and Prometheus (localhost:9090). The API and worker images are built
+from the bundled `Dockerfile`.
+
+If you only need the infrastructure (to run the API/worker natively), start
+just the backing services:
+
+```bash
+docker compose up -d redis rabbitmq
+```
 
 Or run them natively:
 

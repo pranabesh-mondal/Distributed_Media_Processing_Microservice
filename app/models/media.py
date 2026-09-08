@@ -19,13 +19,6 @@ class MediaOperation(str, Enum):
     TRANSCODE = "transcode"
 
 
-class UploadUrlRequest(BaseModel):
-    """Payload for requesting a pre-signed S3 upload URL."""
-
-    media_type: MediaType = Field(..., description="Type of media being uploaded.")
-    filename: str = Field(..., min_length=1, description="Original filename.")
-
-
 class UploadUrlResponse(BaseModel):
     """Response containing a pre-signed S3 upload URL."""
 
@@ -33,12 +26,6 @@ class UploadUrlResponse(BaseModel):
     object_key: str = Field(..., description="S3 object key of the uploaded file.")
     expires_in: int = Field(..., description="URL validity in seconds.")
     content_type: Optional[str] = Field(None, description="Expected MIME type.")
-
-
-class UploadUrlError(BaseModel):
-    """Error payload for upload URL generation."""
-
-    detail: str = Field(..., description="Human-readable error message.")
 
 
 class OperationRequest(BaseModel):
