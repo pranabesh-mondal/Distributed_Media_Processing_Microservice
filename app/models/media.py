@@ -16,13 +16,7 @@ class MediaOperation(str, Enum):
     COMPRESS = "compress"
     WATERMARK = "watermark"
     THUMBNAIL = "thumbnail"
-
-
-class UploadUrlRequest(BaseModel):
-    """Payload for requesting a pre-signed S3 upload URL."""
-
-    media_type: MediaType = Field(..., description="Type of media being uploaded.")
-    filename: str = Field(..., min_length=1, description="Original filename.")
+    TRANSCODE = "transcode"
 
 
 class UploadUrlResponse(BaseModel):
@@ -34,7 +28,12 @@ class UploadUrlResponse(BaseModel):
     content_type: Optional[str] = Field(None, description="Expected MIME type.")
 
 
-class UploadUrlError(BaseModel):
-    """Error payload for upload URL generation."""
+class OperationRequest(BaseModel):
+    """A single processing operation with its parameters.
 
-    detail: str = Field(..., description="Human-readable error message.")
+    See the README "Media Operations" section for accepted parameters per
+    operation. Operations are executed in the order they are listed.
+    """
+
+    op: MediaOperation = Field(..., description="Operation to perform.")
+    params: dict = Field(default_factory=dict, description="Operation-specific parameters.")

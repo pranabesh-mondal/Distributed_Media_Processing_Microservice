@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     REDIS_SOCKET_TIMEOUT: int = 5
     # How often (seconds) to issue a health-check ping on idle connections.
     REDIS_HEALTH_CHECK_INTERVAL: int = 30
+    # How long job records live in Redis (seconds) so completed/failed jobs
+    # are garbage-collected instead of accumulating forever.
+    REDIS_JOB_TTL: int = 86400
 
     # ---- Celery / RabbitMQ ----------------------------------------------
     CELERY_BROKER_URL: str = "amqp://guest:guest@localhost:5672//"

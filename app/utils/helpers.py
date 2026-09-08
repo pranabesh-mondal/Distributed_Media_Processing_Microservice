@@ -27,6 +27,18 @@ def sanitize_filename(filename: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", filename).strip("._")
 
 
+def build_cdn_url(key: str, domain: str) -> Optional[str]:
+    """Return the CloudFront CDN URL for an S3 key, or ``None`` if unconfigured.
+
+    Args:
+        key: S3 object key (path) within the bucket.
+        domain: CloudFront distribution domain (empty string disables CDN).
+    """
+    if not domain:
+        return None
+    return f"https://{domain.strip('/')}/{key.lstrip('/')}"
+
+
 def infer_content_type(filename: str) -> Optional[str]:
     """Best-effort MIME inference from a filename extension."""
     extension = PurePosixPath(filename).suffix.lower().lstrip(".")

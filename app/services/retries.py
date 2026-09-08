@@ -14,9 +14,11 @@ from __future__ import annotations
 import logging
 import time
 from functools import wraps
-from typing import Callable, Iterable, Tuple, Type
+from typing import Callable, Iterable, Tuple, Type, TypeVar
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 class TransientNetworkError(Exception):
@@ -34,17 +36,6 @@ class PermanentNetworkError(Exception):
     configuration. These should surface immediately (or be sent to a dead
     letter) rather than being retried.
     """
-
-
-def is_transient(exc: BaseException) -> bool:
-    """Return ``True`` if an exception represents a retryable network failure."""
-    if isinstance(exc, TransientNetworkError):
-        return True
-    # Allow downstream libraries to contribute their own transient exceptions.
-    for marker in getattr(exc, "__transient_network__", []):
-        if isinstance(exc, marker):
-            return True
-    return False
 
 
 def retry_with_backoff(

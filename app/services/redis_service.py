@@ -15,6 +15,7 @@ from ``app.services.retries``.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 import redis
@@ -35,6 +36,10 @@ logger = logging.getLogger(__name__)
 
 JOB_STATUS_KEY = "jobs:{job_id}:status"
 JOB_ERROR_KEY = "jobs:{job_id}:error"
+JOB_PAYLOAD_KEY = "jobs:{job_id}:payload"  # media type + operations (JSON)
+JOB_RESULT_KEY = "jobs:{job_id}:result"  # worker outcome (JSON)
+JOB_CREATED_KEY = "jobs:{job_id}:created_at"  # ISO timestamp
+JOB_UPDATED_KEY = "jobs:{job_id}:updated_at"  # ISO timestamp
 
 
 class RedisServiceError(Exception):
@@ -87,7 +92,8 @@ class RedisService:
             return True
         except RedisServiceError:
             return False
-# ---- Internal retry plumbing --------------------------------------
+
+    # ---- Internal retry plumbing --------------------------------------
 
     def _retry_command(self, callable_, *args, method: str, **kwargs):
         """Run a redis command, translating failures with bounded backoff.
@@ -123,19 +129,68 @@ class RedisService:
     def _error_key(self, job_id: str) -> str:
         return JOB_ERROR_KEY.format(job_id=job_id)
 
-    def create_job(self, job_id: str) -> str:
-        """Record a new job as ``pending`` and return its status key."""
-        self._retry_command(
-            self.client.set, self._status_key(job_id), "pending",
-            method="create_job",
-        )
+    def _payload_key(self, job_id: str) -> str:
+        return JOB_PAYLOAD_KEY.format(job_id=job_id)
+
+    def _result_key(self, job_id: str) -> str:
+        return JOB_RESULT_KEY.format(job_id=job_id)
+
+    def _created_key(self, job_id: str) -> str:
+        return JOB_CREATED_KEY.format(job_id=job_id)
+
+    def _updated_key(self, job_id: str) -> str:
+        return JOB_UPDATED_KEY.format(job_id=job_id)
+
+    @property
+    def _ttl(self) -> int:
+        """TTL (seconds) applied to every job key so records self-expire."""
+        return self.settings.REDIS_JOB_TTL
+
+    def _now_iso(self) -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def create_job(self, job_id: str, payload_json: Optional[str] = None) -> str:
+        """Record a new job as ``pending`` and return its status key.
+
+        The status, payload, and creation timestamp are written atomically in a
+        single pipeline so a crash between writes can never leave a ``pending``
+        job without its payload. All keys carry the job TTL.
+        """
+        now = self._now_iso()
+
+        def run():
+            pipe = self.client.pipeline(transaction=True)
+            pipe.set(self._status_key(job_id), "pending", ex=self._ttl)
+            if payload_json is not None:
+                pipe.set(self._payload_key(job_id), payload_json, ex=self._ttl)
+            pipe.set(self._created_key(job_id), now, ex=self._ttl)
+            pipe.set(self._updated_key(job_id), now, ex=self._ttl)
+            pipe.execute()
+
+        self._retry_command(run, method="create_job")
         return self._status_key(job_id)
 
     def update_status(self, job_id: str, status: str) -> None:
         """Set the current status of a job, retrying on network failures."""
         self._retry_command(
             self.client.set, self._status_key(job_id), status,
-            method="update_status",
+            ex=self._ttl, method="update_status",
+        )
+        self._retry_command(
+            self.client.set, self._updated_key(job_id), self._now_iso(),
+            ex=self._ttl, method="touch_updated",
+        )
+
+    def get_created_at(self, job_id: str) -> Optional[str]:
+        """Return the job creation timestamp (ISO string), or ``None``."""
+        return self._retry_command(
+            self.client.get, self._created_key(job_id), method="get_created_at"
+        )
+
+    def get_updated_at(self, job_id: str) -> Optional[str]:
+        """Return the job's last update timestamp (ISO string), or ``None``."""
+        return self._retry_command(
+            self.client.get, self._updated_key(job_id), method="get_updated_at"
         )
 
     def get_status(self, job_id: str) -> Optional[str]:
@@ -148,11 +203,37 @@ class RedisService:
         """Persist an error message for a failed job."""
         self._retry_command(
             self.client.set, self._error_key(job_id), message,
-            method="set_error",
+            ex=self._ttl, method="set_error",
         )
 
     def get_error(self, job_id: str) -> Optional[str]:
         """Return the persisted error message for a job."""
         return self._retry_command(
             self.client.get, self._error_key(job_id), method="get_error"
+        )
+
+    def set_payload(self, job_id: str, payload_json: str) -> None:
+        """Store the job payload (media type + operations) as JSON."""
+        self._retry_command(
+            self.client.set, self._payload_key(job_id), payload_json,
+            ex=self._ttl, method="set_payload",
+        )
+
+    def get_payload(self, job_id: str) -> Optional[str]:
+        """Return the stored job payload JSON, or ``None``."""
+        return self._retry_command(
+            self.client.get, self._payload_key(job_id), method="get_payload"
+        )
+
+    def set_result(self, job_id: str, result_json: str) -> None:
+        """Store the worker outcome (result key, thumbnails, metadata) as JSON."""
+        self._retry_command(
+            self.client.set, self._result_key(job_id), result_json,
+            ex=self._ttl, method="set_result",
+        )
+
+    def get_result(self, job_id: str) -> Optional[str]:
+        """Return the stored worker outcome JSON, or ``None``."""
+        return self._retry_command(
+            self.client.get, self._result_key(job_id), method="get_result"
         )
